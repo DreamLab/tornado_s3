@@ -138,7 +138,7 @@ class S3Request(object):
                 args = self.args
                 if hasattr(args, "iteritems"):
                     args = iter(args.items())
-                args = ((quote_plus(k), quote_plus(v)) for (k, v) in args)
+                args = ((quote_plus(k), quote_plus(v)) for k, v in args.items())
                 args = arg_sep.join("%s=%s" % i for i in args)
                 ps.append(args)
             url += "?" + "&".join(ps)
