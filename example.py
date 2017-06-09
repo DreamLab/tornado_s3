@@ -2,8 +2,8 @@ import sys
 import os
 import logging
 import uuid
-import urlparse
-import urllib
+import urllib.parse
+import urllib.request, urllib.parse, urllib.error
 import time
 
 import tornado.options
@@ -49,24 +49,24 @@ s = S3Bucket("mybucket",
 
 
 def delete_callback(success):
-    print success
+    print(success)
 
 def info_callback(i):
-    print i
+    print(i)
     s.delete(["my file 3","my file 4"], callback=delete_callback)
 
 def get_callback(response):
-    print response.body
+    print(response.body)
     s.info("my file", callback=info_callback)
 
 def list_callback(l):
     for (key, modify, etag, size) in l:
-        print key
+        print(key)
     s.get("my file", callback=get_callback)
 
 def put_callback():
-    print 'upload success'
-    print
+    print('upload success')
+    print()
     s.listdir(limit=10, callback=list_callback)
 
 #create file

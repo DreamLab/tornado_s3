@@ -1,17 +1,17 @@
 """Bucket manipulation"""
 
-from __future__ import absolute_import
+
 
 import time
 import hmac
 import hashlib
-import httplib
-import urllib2
+import http.client
+import urllib.request, urllib.error, urllib.parse
 import datetime
 import warnings
 from xml.etree import cElementTree as ElementTree
 from contextlib import contextmanager
-from urllib import quote_plus
+from urllib.parse import quote_plus
 from base64 import b64encode
 from cgi import escape
 from functools import partial
@@ -36,7 +36,7 @@ class S3Error(Exception):
         rv = self.msg
         if self.extra:
             rv += " ("
-            rv += ", ".join("%s=%r" % i for i in self.extra.iteritems())
+            rv += ", ".join("%s=%r" % i for i in self.extra.items())
             rv += ")"
         return rv
 
@@ -53,7 +53,7 @@ class S3Error(Exception):
             # as in chunked mode, but S3 gives an empty reply.
             try:
                 self.data = data = self.fp.read()
-            except (httplib.HTTPException, urllib2.URLError), e:
+            except (http.client.HTTPException, urllib.error.URLError) as e:
                 self.extra["read_error"] = e
             else:
                 data = data.decode("utf-8")
@@ -137,7 +137,7 @@ class S3Request(object):
             if self.args:
                 args = self.args
                 if hasattr(args, "iteritems"):
-                    args = args.iteritems()
+                    args = iter(args.items())
                 args = ((quote_plus(k), quote_plus(v)) for (k, v) in args)
                 args = arg_sep.join("%s=%s" % i for i in args)
                 ps.append(args)
@@ -254,7 +254,7 @@ class S3Bucket(object):
             http_client = httpclient.AsyncHTTPClient()
             http_client.fetch(req, callback)
 
-        except (httpclient.HTTPError), e:
+        except (httpclient.HTTPError) as e:
             pass
 
     def _get(self, response, callback):
@@ -276,7 +276,7 @@ class S3Bucket(object):
 
     def put(self, key, data=None, acl=None, metadata={}, mimetype=None,
             transformer=None, headers={}, callback=None):
-        if isinstance(data, unicode):
+        if isinstance(data, str):
             data = data.encode(self.default_encoding)
         headers = headers.copy()
         if mimetype:
@@ -310,7 +310,7 @@ class S3Bucket(object):
             # does not, so treat errors and non-errors as equals.
             try:
                 self.send(self.request(method="DELETE", key=keys[0]), partial(self._delete, callback=callback))
-            except KeyNotFound, e:
+            except KeyNotFound as e:
                 e.fp.close()
         else:
             if n_keys > 1000:

@@ -5,7 +5,7 @@ import hashlib
 import datetime
 import mimetypes
 from base64 import b64encode
-from urllib import quote
+from urllib.parse import quote
 from calendar import timegm
 
 def _amz_canonicalize(headers):
@@ -20,7 +20,7 @@ def _amz_canonicalize(headers):
     ''
     """
     rv = {}
-    for header, value in headers.iteritems():
+    for header, value in headers.items():
         header = header.lower()
         if header.startswith("x-amz-"):
             rv.setdefault(header, []).append(value)
@@ -30,10 +30,10 @@ def _amz_canonicalize(headers):
     return "".join(parts)
 
 def metadata_headers(metadata):
-    return dict(("X-AMZ-Meta-" + h, v) for h, v in metadata.iteritems())
+    return dict(("X-AMZ-Meta-" + h, v) for h, v in metadata.items())
 
 def headers_metadata(headers):
-    return dict((h[11:], v) for h, v in headers.iteritems()
+    return dict((h[11:], v) for h, v in headers.items()
                             if h.lower().startswith("x-amz-meta-"))
 
 iso8601_fmt = '%Y-%m-%dT%H:%M:%S.000Z'
@@ -106,7 +106,7 @@ def aws_urlquote(value):
     >>> aws_urlquote("/bucket/a key")
     '/bucket/a%20key'
     """
-    if isinstance(value, unicode):
+    if isinstance(value, str):
         value = value.encode("utf-8")
     return quote(value, "/")
 

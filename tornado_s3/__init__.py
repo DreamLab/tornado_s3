@@ -119,7 +119,7 @@ Boom. What's more? Listing the bucket::
 That about sums the basics up.
 """
 
-from __future__ import absolute_import
+
 
 __version__ = "1.1.0"
 
