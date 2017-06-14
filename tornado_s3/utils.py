@@ -94,10 +94,13 @@ def aws_md5(data):
             chunk = data.read(8192)
             if not chunk:
                 break
-            hasher.update(chunk)
+            hasher.update(chunk.encode())
         data.seek(0)
     else:
-        hasher.update(data)
+        if type(data) == str:
+            hasher.update(data.encode('utf-8'))
+        else:
+            hasher.update(data)
     return b64encode(hasher.digest()).decode("ascii")
 
 def aws_urlquote(value):

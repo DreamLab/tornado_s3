@@ -20,7 +20,7 @@ from .utils import (_amz_canonicalize, metadata_headers, rfc822_fmtdate, _iso860
                     aws_md5, aws_urlquote, guess_mimetype, info_dict, expire2datetime)
 
 import tornado.httpclient as httpclient
-
+from tornado import gen
 
 amazon_s3_domain = "s3.amazonaws.com"
 amazon_s3_ns_url = "http://%s/doc/2006-03-01/" % amazon_s3_domain
@@ -118,7 +118,7 @@ class S3Request(object):
         desc = self.descriptor()
         key = cred.secret_key.encode("utf-8")
         hasher = hmac.new(key, desc.encode("utf-8"), hashlib.sha1)
-        sign = b64encode(hasher.digest())
+        sign = b64encode(hasher.digest()).decode()
         self.headers["Authorization"] = "AWS %s:%s" % (cred.access_key, sign)
         return sign
 
@@ -138,7 +138,8 @@ class S3Request(object):
                 args = self.args
                 if hasattr(args, "iteritems"):
                     args = iter(args.items())
-                args = ((quote_plus(k), quote_plus(v)) for (k, v) in args)
+                print (args)
+                args = ((quote_plus(k), quote_plus(v)) for (k, v) in args.items())
                 args = arg_sep.join("%s=%s" % i for i in args)
                 ps.append(args)
             url += "?" + "&".join(ps)
@@ -247,13 +248,14 @@ class S3Bucket(object):
         k.setdefault("bucket", self.name)
         return S3Request(*a, **k)
 
+    @gen.coroutine
     def send(self, s3req, callback=None):
         s3req.sign(self)
         req = s3req.urllib(self)
         try:
             http_client = httpclient.AsyncHTTPClient()
-            http_client.fetch(req, callback)
-
+            result = yield http_client.fetch(req, callback)
+            return result
         except (httpclient.HTTPError) as e:
             pass
 
@@ -274,6 +276,7 @@ class S3Bucket(object):
     def _put(self, response, callback):
         if callback: callback()
 
+    @gen.coroutine
     def put(self, key, data=None, acl=None, metadata={}, mimetype=None,
             transformer=None, headers={}, callback=None):
         if isinstance(data, str):
@@ -292,36 +295,18 @@ class S3Bucket(object):
             headers["Content-MD5"] = aws_md5(data)
 
         s3req = self.request(method="PUT", key=key, data=data, headers=headers)
-        self.send(s3req, partial(self._put, callback=callback))
+        result = yield self.send(s3req, partial(self._put, callback=callback))
+        return result
 
     def _delete(self, response, callback):
         success = 200 <= response.code < 300
         if callback: callback(success)
 
-    def delete(self, keys, callback=None):
-        assert isinstance(keys, list)
-
-        n_keys = len(keys)
-        if not keys:
-            raise TypeError("required one key at least")
-
-        if n_keys == 1:
-            # In <=py25, urllib2 raises an exception for HTTP 204, and later
-            # does not, so treat errors and non-errors as equals.
-            try:
-                self.send(self.request(method="DELETE", key=keys[0]), partial(self._delete, callback=callback))
-            except KeyNotFound as e:
-                e.fp.close()
-        else:
-            if n_keys > 1000:
-                raise ValueError("cannot delete more than 1000 keys at a time")
-            fmt = "<Object><Key>%s</Key></Object>"
-            body = "".join(fmt % escape(k) for k in keys)
-            data = ('<?xml version="1.0" encoding="UTF-8"?><Delete>'
-                    "<Quiet>true</Quiet>%s</Delete>") % body
-            headers = {"Content-Type": "multipart/form-data"}
-            self.send(self.request(method="POST", data=data,
-                                   headers=headers, subresource="delete"), partial(self._delete, callback=callback))
+    def delete(self, key, callback=None):
+        try:
+            self.send(self.request(method="DELETE", key=key), partial(self._delete, callback=callback))
+        except KeyNotFound as e:
+            e.fp.close()
 
     def _listing(self, response, result, args, callback):
         listing = S3Listing.parse(response.buffer)
@@ -333,6 +318,7 @@ class S3Bucket(object):
         else:
             if callback: callback(result)
 
+    @gen.coroutine
     def listdir(self, prefix=None, marker=None, limit=None, delimiter=None, callback=None):
         """List bucket contents.
 
@@ -353,7 +339,8 @@ class S3Bucket(object):
              ("delimiter", delimiter))
         args = dict((str(k), str(v)) for (k, v) in m if v is not None)
 
-        self.send(self.request(args=args), partial(self._listing, result=[], args=args, callback=callback))
+        result = yield self.send(self.request(args=args), partial(self._listing, result=[], args=args, callback=callback))
+        return result
 
     def make_url(self, key, args=None, arg_sep=";"):
         s3req = self.request(key=key, args=args)
