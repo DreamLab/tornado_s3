@@ -1,78 +1,39 @@
-import sys
-import os
-import logging
-import uuid
-import urllib.parse
-import urllib.request, urllib.parse, urllib.error
-import time
-
-import tornado.options
-import tornado.ioloop
 import tornado.web
-import tornado.httpclient as httpclient
+from tornado import gen
 
 from tornado_s3 import S3Bucket
 
-
-class TestHandler(tornado.web.RequestHandler):
-    def get(self):
-        # send email notifaction
-        """
-        user_msg = EmailMessage()
-        user_msg.subject = u"Test"
-        user_msg.bodyHtml = "This is the test content."
-        self.send("your@address.net", "user@address.net", user_msg)
-        """
-        pass
-
 settings = {
-    #"AmazonAccessKeyID": "00000000000000000000",
-    #"AmazonSecretAccessKey": "0000000000000000000000000000000000000000",
+    "AmazonAccessKeyID": "XXXXXXXXXXXXXXXX",
+    "AmazonSecretAccessKey": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
     "debug": True,
 }
 
-application = tornado.web.Application([
-    (r"/", TestHandler),
-], **settings)
-
-"""
-if __name__ == "__main__":
-    tornado.options.parse_command_line()
-    application.listen(int(sys.argv[1]))
-    tornado.ioloop.IOLoop.instance().start()
-"""
-
-s = S3Bucket("mybucket",
+s = S3Bucket("$BUCKET",
              access_key=settings["AmazonAccessKeyID"],
              secret_key=settings["AmazonSecretAccessKey"],
-             base_url="http://s3-ap-southeast-1.amazonaws.com/mybucket")
+             base_url="http://$URL/$BUCKET")
+
+filename = 'myfile 3'
 
 
-def delete_callback(success):
-    print(success)
+@gen.coroutine
+def do_something():
+    print("going to put a file")
+    res = yield s.put(filename, "my content")
+    print("response?", res)
+    list_dir = yield s.listdir(limit=10)
+    print(list_dir)
 
-def info_callback(i):
-    print(i)
-    s.delete(["my file 3","my file 4"], callback=delete_callback)
 
-def get_callback(response):
-    print(response.body)
-    s.info("my file", callback=info_callback)
-
-def list_callback(l):
-    for (key, modify, etag, size) in l:
-        print(key)
-    s.get("my file", callback=get_callback)
-
-def put_callback():
-    print('upload success')
-    print()
-    s.listdir(limit=10, callback=list_callback)
-
-#create file
-s.put("my file", "my content", callback=put_callback)
-
+@gen.coroutine
+def minute_loop():
+    while True:
+        yield do_something()
+        yield gen.sleep(60)
 
 
 if __name__ == "__main__":
+    tornado.ioloop.IOLoop.current().spawn_callback(minute_loop)
+    print("after start")
     tornado.ioloop.IOLoop.instance().start()

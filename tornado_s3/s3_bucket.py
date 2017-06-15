@@ -1,197 +1,21 @@
 """Bucket manipulation"""
 
-
-
-import time
-import hmac
-import hashlib
-import http.client
-import urllib.request, urllib.error, urllib.parse
 import datetime
+import time
 import warnings
-from xml.etree import cElementTree as ElementTree
 from contextlib import contextmanager
-from urllib.parse import quote_plus
-from base64 import b64encode
-from cgi import escape
 from functools import partial
-
-from .utils import (_amz_canonicalize, metadata_headers, rfc822_fmtdate, _iso8601_dt,
-                    aws_md5, aws_urlquote, guess_mimetype, info_dict, expire2datetime)
 
 import tornado.httpclient as httpclient
 from tornado import gen
 
+from tornado_s3.exceptions.key_exceptions import KeyNotFound
+from .s3_listing import S3Listing
+from .s3_request import S3Request
+from .utils import (metadata_headers, aws_md5, aws_urlquote, guess_mimetype, info_dict, expire2datetime)
+
 amazon_s3_domain = "s3.amazonaws.com"
-amazon_s3_ns_url = "http://%s/doc/2006-03-01/" % amazon_s3_domain
 
-class S3Error(Exception):
-    fp = None
-
-    def __init__(self, message, **kwds):
-        self.args = message, kwds.copy()
-        self.msg, self.extra = self.args
-
-    def __str__(self):
-        rv = self.msg
-        if self.extra:
-            rv += " ("
-            rv += ", ".join("%s=%r" % i for i in self.extra.items())
-            rv += ")"
-        return rv
-
-    @classmethod
-    def from_urllib(cls, e, **extra):
-        """Try to read the real error from AWS."""
-        self = cls("HTTP error", **extra)
-        for attr in ("reason", "code", "filename"):
-            if attr not in extra and hasattr(e, attr):
-                self.extra[attr] = getattr(e, attr)
-        self.fp = getattr(e, "fp", None)
-        if self.fp:
-            # The except clause is to avoid a bug in urllib2 which has it read
-            # as in chunked mode, but S3 gives an empty reply.
-            try:
-                self.data = data = self.fp.read()
-            except (http.client.HTTPException, urllib.error.URLError) as e:
-                self.extra["read_error"] = e
-            else:
-                data = data.decode("utf-8")
-                begin, end = data.find("<Message>"), data.find("</Message>")
-                if min(begin, end) >= 0:
-                    self.msg = data[begin + 9:end]
-        return self
-
-    @property
-    def code(self): return self.extra.get("code")
-
-class KeyNotFound(S3Error, KeyError):
-    @property
-    def key(self): return self.extra.get("key")
-
-class S3Request(object):
-    #urllib_request_cls = AnyMethodRequest
-    urllib_request_cls = httpclient.HTTPRequest
-
-    def __init__(self, bucket=None, key=None, method="GET", headers={},
-                 args=None, data=None, subresource=None):
-        headers = headers.copy()
-        if data and "Content-MD5" not in headers:
-            headers["Content-MD5"] = aws_md5(data)
-        if "Date" not in headers:
-            headers["Date"] = rfc822_fmtdate()
-        if hasattr(bucket, "name"):
-            bucket = bucket.name
-        self.bucket = bucket
-        self.key = key
-        self.method = method
-        self.headers = headers
-        self.args = args
-        self.data = data
-        self.subresource = subresource
-
-    def __str__(self):
-        return "<S3 %s request bucket %r key %r>" % (self.method, self.bucket, self.key)
-
-    def descriptor(self):
-        # The signature descriptor is detalied in the developer's PDF on p. 65.
-        lines = (self.method,
-                 self.headers.get("Content-MD5", ""),
-                 self.headers.get("Content-Type", ""),
-                 self.headers.get("Date", ""))
-        preamb = "\n".join(str(line) for line in lines) + "\n"
-        headers = _amz_canonicalize(self.headers)
-        res = self.canonical_resource
-        return "".join((preamb, headers, res))
-
-    @property
-    def canonical_resource(self):
-        res = "/%s/" % aws_urlquote(self.bucket)
-        if self.key:
-            res += aws_urlquote(self.key)
-        if self.subresource:
-            res += "?" + aws_urlquote(self.subresource)
-        return res
-
-    def sign(self, cred):
-        "Sign the request with credentials *cred*."
-        desc = self.descriptor()
-        key = cred.secret_key.encode("utf-8")
-        hasher = hmac.new(key, desc.encode("utf-8"), hashlib.sha1)
-        sign = b64encode(hasher.digest()).decode()
-        self.headers["Authorization"] = "AWS %s:%s" % (cred.access_key, sign)
-        return sign
-
-    def urllib(self, bucket):
-        return self.urllib_request_cls(self.url(bucket.base_url), method=self.method,
-                                       body=self.data, headers=self.headers)
-
-    def url(self, base_url, arg_sep="&"):
-        url = base_url + "/"
-        if self.key:
-            url += aws_urlquote(self.key)
-        if self.subresource or self.args:
-            ps = []
-            if self.subresource:
-                ps.append(self.subresource)
-            if self.args:
-                args = self.args
-                if hasattr(args, "iteritems"):
-                    args = iter(args.items())
-                args = ((quote_plus(k), quote_plus(v)) for k, v in args.items())
-                args = arg_sep.join("%s=%s" % i for i in args)
-                ps.append(args)
-            url += "?" + "&".join(ps)
-        return url
-
-class S3File(str):
-    def __new__(cls, value, **kwds):
-        return super(S3File, cls).__new__(cls, value)
-
-    def __init__(self, value, **kwds):
-        kwds["data"] = value
-        self.kwds = kwds
-
-    def put_into(self, bucket, key):
-        return bucket.put(key, **self.kwds)
-
-class S3Listing(object):
-    """Representation of a single pageful of S3 bucket listing data."""
-
-    truncated = None
-
-    def __init__(self, etree):
-        # TODO Use SAX - processes XML before downloading entire response
-        root = etree.getroot()
-        expect_tag = self._mktag("ListBucketResult")
-        if root.tag != expect_tag:
-            raise ValueError("root tag mismatch, wanted %r but got %r"
-                             % (expect_tag, root.tag))
-        self.etree = etree
-        trunc_text = root.findtext(self._mktag("IsTruncated"))
-        self.truncated = {"true": True, "false": False}[trunc_text]
-
-    def __iter__(self):
-        root = self.etree.getroot()
-        for entry in root.findall(self._mktag("Contents")):
-            item = self._el2item(entry)
-            yield item
-            self.next_marker = item[0]
-
-    @classmethod
-    def parse(cls, resp):
-        return cls(ElementTree.parse(resp))
-
-    def _mktag(self, name):
-        return "{%s}%s" % (amazon_s3_ns_url, name)
-
-    def _el2item(self, el):
-        get = lambda tag: el.findtext(self._mktag(tag))
-        key = get("Key")
-        modify = _iso8601_dt(get("LastModified"))
-        etag = get("ETag")
-        size = int(get("Size"))
-        return (key, modify, etag, size)
 
 class S3Bucket(object):
     default_encoding = "utf-8"
@@ -206,7 +30,7 @@ class S3Bucket(object):
             if not base_url.startswith(scheme + "://"):
                 raise ValueError("secure=%r, url must use %s"
                                  % (secure, scheme))
-        #self.opener = self.build_opener()
+        # self.opener = self.build_opener()
         self.name = name
         self.access_key = access_key
         self.secret_key = secret_key
@@ -220,13 +44,18 @@ class S3Bucket(object):
         return self.__class__.__name__ + "(%r, access_key=%r, base_url=%r)" % (
             self.name, self.access_key, self.base_url)
 
-    def __getitem__(self, name): return self.get(name)
-    def __delitem__(self, name): return self.delete(name)
+    def __getitem__(self, name):
+        return self.get(name)
+
+    def __delitem__(self, name):
+        return self.delete(name)
+
     def __setitem__(self, name, value):
         if hasattr(value, "put_into"):
             return value.put_into(self, name)
         else:
             return self.put(name, value)
+
     def __contains__(self, name):
         try:
             self.info(name)
@@ -255,7 +84,7 @@ class S3Bucket(object):
             http_client = httpclient.AsyncHTTPClient()
             result = yield http_client.fetch(req, callback)
             return result
-        except (httpclient.HTTPError) as e:
+        except httpclient.HTTPError as e:
             pass
 
     def _get(self, response, callback):
@@ -338,7 +167,8 @@ class S3Bucket(object):
              ("delimiter", delimiter))
         args = dict((str(k), str(v)) for (k, v) in m if v is not None)
 
-        result = yield self.send(self.request(args=args), partial(self._listing, result=[], args=args, callback=callback))
+        result = yield self.send(self.request(args=args),
+                                 partial(self._listing, result=[], args=args, callback=callback))
         return result
 
     def make_url(self, key, args=None, arg_sep=";"):

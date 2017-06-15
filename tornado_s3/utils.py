@@ -8,6 +8,7 @@ from base64 import b64encode
 from urllib.parse import quote
 from calendar import timegm
 
+
 def _amz_canonicalize(headers):
     r"""Canonicalize AMZ headers in that certain AWS way.
 
@@ -29,24 +30,33 @@ def _amz_canonicalize(headers):
         parts.append("%s:%s\n" % (key, ",".join(rv[key])))
     return "".join(parts)
 
+
 def metadata_headers(metadata):
     return dict(("X-AMZ-Meta-" + h, v) for h, v in metadata.items())
 
+
 def headers_metadata(headers):
     return dict((h[11:], v) for h, v in headers.items()
-                            if h.lower().startswith("x-amz-meta-"))
+                if h.lower().startswith("x-amz-meta-"))
+
 
 iso8601_fmt = '%Y-%m-%dT%H:%M:%S.000Z'
 
+
 def _iso8601_dt(v): return datetime.datetime.strptime(v, iso8601_fmt)
+
+
 def rfc822_fmtdate(t=None):
     from email.utils import formatdate
     if t is None:
         t = datetime.datetime.utcnow()
     return formatdate(timegm(t.timetuple()), usegmt=True)
+
+
 def rfc822_parsedate(v):
     from email.utils import parsedate
     return datetime.datetime.fromtimestamp(time.mktime(parsedate(v)))
+
 
 def expire2datetime(expire, base=None):
     """Force *expire* into a datetime relative to *base*.
@@ -85,6 +95,7 @@ def expire2datetime(expire, base=None):
         else:
             return datetime.datetime.fromtimestamp(expire)
 
+
 def aws_md5(data):
     """Make an AWS-style MD5 hash (digest in base64)."""
     hasher = hashlib.new("md5")
@@ -103,6 +114,7 @@ def aws_md5(data):
             hasher.update(data)
     return b64encode(hasher.digest()).decode("ascii")
 
+
 def aws_urlquote(value):
     r"""AWS-style quote a URL part.
 
@@ -112,6 +124,7 @@ def aws_urlquote(value):
     if isinstance(value, str):
         value = value.encode("utf-8")
     return quote(value, "/")
+
 
 def guess_mimetype(fn, default="application/octet-stream"):
     """Guess a mimetype from filename *fn*.
@@ -127,6 +140,7 @@ def guess_mimetype(fn, default="application/octet-stream"):
     if ext == "jpg": ext = "jpeg"
     return mimetypes.guess_type(bfn + "." + ext)[0] or default
 
+
 def info_dict(headers):
     rv = {"headers": headers, "metadata": headers_metadata(headers)}
     if "content-length" in headers:
@@ -138,6 +152,7 @@ def info_dict(headers):
     if "last-modified" in headers:
         rv["modify"] = rfc822_parsedate(headers["last-modified"])
     return rv
+
 
 def name(o):
     """Find the name of *o*.
